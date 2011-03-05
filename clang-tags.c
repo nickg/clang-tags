@@ -1,15 +1,57 @@
 #include "clang-c/Index.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
 
 typedef struct {
-   CXFile *source_file;
+   CXFile     *source_file;
+   const char *file_contents;
 } VisitorArgs;
+
+static FILE   *output = NULL;
+static char   *etags_buf = NULL;
+static char   *etags_wr_ptr = NULL;
+static size_t etags_buf_len = 0;
 
 static void emit_file(const char *file)
 {
+   const size_t bytes = etags_wr_ptr - etags_buf;
+   
+   fprintf(output, "\x0c\n");
+   fprintf(output, "%s,%lu\n", file, bytes);
+   fputs(etags_buf, output);
+
+   etags_wr_ptr = etags_buf;
+}
+
+static void emit_tag(const char *name, const char *text,
+                     unsigned line, unsigned offset)
+{
+   const size_t etags_buf_off = etags_wr_ptr - etags_buf;
+   size_t remain = etags_buf_len - etags_buf_off;
+   const size_t max_line_off_sz = 64;
+   const size_t line_len = strlen(name) + strlen(text) + max_line_off_sz;
+   
+   while (remain < line_len) {
+      remain += etags_buf_len;
+      etags_buf_len *= 2;
+      etags_buf = realloc(etags_buf, etags_buf_len);
+      assert(etags_buf != NULL);
+
+      printf("*** resize buffer to %lu\n", etags_buf_len);
+
+      etags_wr_ptr = etags_buf + etags_buf_off;
+   }
+
+   etags_wr_ptr += snprintf(etags_wr_ptr, remain, "%s\x7f%s\x01%u,%u\n",
+                            text, name, line, offset);
 
 }
 
@@ -32,6 +74,7 @@ static enum CXChildVisitResult cursor_visitor(CXCursor cursor,
          printf("visit: %s: line %u col %u off %u: %s\n",
                 clang_getCString(file_str), line, column, offset,
                 clang_getCString(str));
+         emit_tag(clang_getCString(str), "test", line, offset);
          clang_disposeString(str);
          clang_disposeString(file_str);
       }
@@ -44,13 +87,57 @@ static enum CXChildVisitResult cursor_visitor(CXCursor cursor,
       return CXChildVisit_Continue;
    }
 }
+
+static void process_file(CXTranslationUnit tu, const char *file)
+{
+   int fd = open(file, O_RDONLY);
+   if (fd < 0) {
+      perror(file);
+      return;
+   }
+
+   struct stat st;
+   if (fstat(fd, &st) < 0) {
+      perror(file);
+      return;
+   }
+
+   char *contents = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+   if (contents == MAP_FAILED) {
+      perror("mmap");
+      return;
+   }
+   
+   CXCursor cur = clang_getTranslationUnitCursor(tu);
+
+   VisitorArgs args = {
+      .source_file   = clang_getFile(tu, file),
+      .file_contents = contents
+   };
+   clang_visitChildren(cur, cursor_visitor, (CXClientData*)&args);
+
+   emit_file(file);
+
+   munmap(contents, st.st_size);
+   close(fd);
+}
  
 int main(int argc, char **argv)
 {
    if (argc != 2) {
       fprintf(stderr, "usage: clang-tags [file]\n");
-      exit(EXIT_FAILURE);
+      return EXIT_FAILURE;
    }
+
+   output = fopen("TAGS", "w");
+   if (output == NULL) {
+      fprintf(stderr, "failed to open TAGS for writing\n");
+      return EXIT_FAILURE;
+   }
+
+   etags_buf_len = 16;
+   etags_buf = etags_wr_ptr = malloc(etags_buf_len);
+   assert(etags_buf != NULL);
    
    CXIndex index = clang_createIndex(
       1,    // excludeDeclarationsFromPCH 
@@ -65,17 +152,13 @@ int main(int argc, char **argv)
       0,                // Number of unsaved files
       0);               // Flags
 
-   printf("tu = %p\n", tu);
-
-   CXCursor cur = clang_getTranslationUnitCursor(tu);
-
-   VisitorArgs args = {
-      .source_file = clang_getFile(tu, argv[1])
-   };
-   clang_visitChildren(cur, cursor_visitor, (CXClientData*)&args);
+   process_file(tu, argv[1]);
    
+   fclose(output);
+   
+   free(etags_buf);
    clang_disposeTranslationUnit(tu);
-
    clang_disposeIndex(index);
+        
    return 0;
 }
