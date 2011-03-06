@@ -9,6 +9,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <stdbool.h>
+#include <ctype.h>
 
 typedef struct {
    CXFile     *source_file;
@@ -52,7 +54,42 @@ static void emit_tag(const char *name, const char *text,
 
    etags_wr_ptr += snprintf(etags_wr_ptr, remain, "%s\x7f%s\x01%u,%u\n",
                             text, name, line, offset);
+}
 
+static bool end_search_char(char ch)
+{
+   return ch == '(' || ch == '{' || ch == '\n' || ch == '\r'
+      || ch == ';' || ch == '=';
+}
+
+static char *find_search_text(const char *content,
+                              unsigned offset,
+                              unsigned max)
+{
+   const char *start, *end;
+
+   start = end = content + offset;
+
+   // Search backwards to the beginning of the line
+   while (start > content && start[-1] != '\n')
+      start--;
+
+   // Search forwards to the next brace or parenthesis
+   while (end <= content + offset + max && !end_search_char(*end))
+      end++;
+
+   // Drop any trailing whitespace
+   while (isspace(*end))
+      end--;
+
+   const size_t nchars = end - start;
+   char *buf = malloc(nchars + 1);
+   assert(buf != NULL);
+
+   memcpy(buf, start, nchars);
+   buf[nchars] = '\0';
+
+   return buf;
 }
 
 static enum CXChildVisitResult cursor_visitor(CXCursor cursor,
@@ -69,14 +106,24 @@ static enum CXChildVisitResult cursor_visitor(CXCursor cursor,
       clang_getSpellingLocation(loc, &file, &line, &column, &offset);
 
       if (file == args->source_file) {
+         CXSourceRange extent = clang_getCursorExtent(cursor);
+         unsigned end;
+         clang_getSpellingLocation(clang_getRangeEnd(extent),
+                                   NULL, NULL, NULL, &end);
+         
+         char *search = find_search_text(args->file_contents,
+                                         offset, end - offset);
+         
          CXString file_str = clang_getFileName(file);
          CXString str = clang_getCursorSpelling(cursor);
          printf("visit: %s: line %u col %u off %u: %s\n",
                 clang_getCString(file_str), line, column, offset,
                 clang_getCString(str));
-         emit_tag(clang_getCString(str), "test", line, offset);
+         emit_tag(clang_getCString(str), search, line, offset);
+         
          clang_disposeString(str);
          clang_disposeString(file_str);
+         free(search);
       }
    }
 
