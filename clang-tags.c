@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <getopt.h>
 
 typedef struct {
    CXFile     *source_file;
@@ -172,12 +173,38 @@ static void process_file(CXTranslationUnit tu, const char *file)
    close(fd);
 }
  
+static struct option long_options[] = {
+   {0, 0, 0, 0}
+};
+
 int main(int argc, char **argv)
 {
-   if (argc != 2) {
-      fprintf(stderr, "usage: clang-tags [file]\n");
-      return EXIT_FAILURE;
+   const size_t max_clang_args = 64;
+   int clang_argc = 0;
+   char **clang_argv = malloc(sizeof(char*) * max_clang_args);
+   assert(clang_argv != NULL);
+   
+   const char *spec = "I:";
+   int c, failure = 0;
+   while ((c = getopt_long(argc, argv, spec, long_options, NULL)) != -1) {
+      switch (c) {
+      case '0':    // Set a flag
+         break;
+      case 'I':
+         if (clang_argc < max_clang_args - 1) {
+            clang_argv[clang_argc++] = "-I";
+            clang_argv[clang_argc++] = optarg;
+         }
+         break;
+      case '?':
+         failure = 1;
+         break;
+      default:
+         abort();
+      }
    }
+   if (failure)
+      return EXIT_FAILURE;
 
    output = fopen("TAGS", "w");
    if (output == NULL) {
@@ -193,22 +220,35 @@ int main(int argc, char **argv)
       1,    // excludeDeclarationsFromPCH 
       1);   // displayDiagnostics
 
-   CXTranslationUnit tu = clang_parseTranslationUnit(
-      index,            // Index
-      argv[1],          // Source file name
-      NULL,             // Command line arguments
-      0,                // Number of arguments
-      NULL,             // Unsaved files
-      0,                // Number of unsaved files
-      0);               // Flags
+   CXTranslationUnit *tus =
+      (CXTranslationUnit*)malloc(sizeof(CXTranslationUnit) * (argc - optind));
+   assert(tus != NULL);
 
-   process_file(tu, argv[1]);
+   for (int i = optind; i < argc; i++) {
+      tus[i - optind] = clang_parseTranslationUnit(
+         index,                            // Index
+         argv[i],                          // Source file name
+         (const char* const*)clang_argv,   // Command line arguments
+         clang_argc,                       // Number of arguments
+         NULL,                             // Unsaved files
+         0,                                // Number of unsaved files
+         0);                               // Flags
+   }
+
+   for (int i = optind; i < argc; i++) {
+      process_file(tus[i - optind], argv[i]);
+   }
    
+   for (int i = optind; i < argc; i++) {
+      clang_disposeTranslationUnit(tus[i - optind]);
+   }
+   clang_disposeIndex(index);
+        
    fclose(output);
    
    free(etags_buf);
-   clang_disposeTranslationUnit(tu);
-   clang_disposeIndex(index);
-        
+   free(tus);
+   free(clang_argv);
+
    return 0;
 }
