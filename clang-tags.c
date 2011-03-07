@@ -58,8 +58,8 @@ static void emit_tag(const char *name, const char *text,
 
 static bool end_search_char(char ch)
 {
-   return ch == '(' || ch == '{' || ch == '\n' || ch == '\r'
-      || ch == ';' || ch == '=';
+   return ch == ')' || ch == '{' || ch == '\n' || ch == '\r'
+      || ch == ';';
 }
 
 static char *find_search_text(const char *content,
@@ -82,7 +82,7 @@ static char *find_search_text(const char *content,
    while (isspace(*end))
       end--;
 
-   const size_t nchars = end - start;
+   const size_t nchars = end - start + 1;
    char *buf = malloc(nchars + 1);
    assert(buf != NULL);
 
