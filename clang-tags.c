@@ -116,10 +116,13 @@ static enum CXChildVisitResult cursor_visitor(CXCursor cursor,
          
          CXString file_str = clang_getFileName(file);
          CXString str = clang_getCursorSpelling(cursor);
-         printf("visit: %s: line %u col %u off %u: %s\n",
-                clang_getCString(file_str), line, column, offset,
-                clang_getCString(str));
-         emit_tag(clang_getCString(str), search, line, offset);
+
+         if (clang_getCString(str)[0] != '\0') {
+            printf("visit: %s: line %u col %u off %u: %s\n",
+                   clang_getCString(file_str), line, column, offset,
+                   clang_getCString(str));
+            emit_tag(clang_getCString(str), search, line, offset);
+         }
          
          clang_disposeString(str);
          clang_disposeString(file_str);
