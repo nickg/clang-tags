@@ -22,10 +22,14 @@ typedef struct {
    const char *file_contents;
 } VisitorArgs;
 
+#define MAX_MISSING_FILES 100
+
 static FILE   *output = NULL;
 static char   *etags_buf = NULL;
 static char   *etags_wr_ptr = NULL;
 static size_t etags_buf_len = 0;
+static char   *missing_files[MAX_MISSING_FILES] = { NULL };
+static int    n_missing_files = 0;
 
 #define SOURCE_REGEX "\\.(c|cpp|cc|cxx|h|hpp)$"
 
@@ -145,8 +149,61 @@ static enum CXChildVisitResult cursor_visitor(CXCursor cursor,
    }
 }
 
+static void add_missing_file(char *file)
+{
+   assert(n_missing_files < MAX_MISSING_FILES);
+
+   for (int i = 0; i < n_missing_files; i++) {
+      if (strcmp(missing_files[i], file) == 0) {
+         free(file);
+         return;
+      }         
+   }
+
+   missing_files[n_missing_files++] = file;
+}
+
 static void process_file(CXTranslationUnit tu, const char *file)
 {
+   static bool diag_reg_comp = false;
+   static regex_t diag_reg;
+
+   if (!diag_reg_comp) {
+      int rc = regcomp(&diag_reg, "'(.*)' file not found", REG_EXTENDED);
+      assert(rc == 0);
+
+      diag_reg_comp = true;
+   }
+   
+   unsigned ndiag = clang_getNumDiagnostics(tu);
+
+   for (unsigned i = 0; i < ndiag; i++) {
+      CXDiagnostic diag = clang_getDiagnostic(tu, i);
+
+      unsigned cat = clang_getDiagnosticCategory(diag);
+      if (cat == 2 && n_missing_files < MAX_MISSING_FILES) {
+         // Preprocessor issue
+         CXString spell = clang_getDiagnosticSpelling(diag);
+
+         regmatch_t rm[2];
+         const char *s = clang_getCString(spell);
+         if (regexec(&diag_reg, s, 2, rm, 0) != REG_NOMATCH) {
+            char *buf = malloc(rm[1].rm_eo - rm[1].rm_so + 2);
+            const char *src = s + rm[1].rm_so;
+            char *dst = buf;
+            while (src != s + rm[1].rm_eo)
+               *dst++ = *src++;
+            *dst = '\0';
+
+            add_missing_file(buf);
+         }
+         
+         clang_disposeString(spell);
+      }
+      
+      clang_disposeDiagnostic(diag);
+   }
+   
    int fd = open(file, O_RDONLY);
    if (fd < 0) {
       perror(file);
@@ -282,7 +339,7 @@ int main(int argc, char **argv)
    
    CXIndex index = clang_createIndex(
       1,    // excludeDeclarationsFromPCH 
-      1);   // displayDiagnostics
+      0);   // displayDiagnostics
 
    regex_t source_files;
    int rc = regcomp(&source_files, SOURCE_REGEX, REG_EXTENDED);
@@ -292,8 +349,16 @@ int main(int argc, char **argv)
       visit_path(argv[i], &source_files, index,
                  (const char**)clang_argv, clang_argc);
    }
+   
+   printf("\nDone\n");
 
-   printf("\nDone.\n");
+   if (n_missing_files > 0) {
+      printf("\nThe following include files could not be found:\n");
+      for (int i = 0; i < n_missing_files; i++)
+         printf("   %s\n", missing_files[i]);
+      printf("Using -I to specify header search directories will "
+             "improve results.\n");
+   }
 
    clang_disposeIndex(index);
         
