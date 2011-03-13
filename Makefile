@@ -4,7 +4,7 @@ CFLAGS = -Wall -g
 all: clang-tags
 
 clang-tags: clang-tags.c
-	clang $(CFLAGS) -o $@ $< $(LIBS)
+	cc $(CFLAGS) -o $@ $< $(LIBS) -std=gnu99
 
 clean:
 	rm -f clang-tags

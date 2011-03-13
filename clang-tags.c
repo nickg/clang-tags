@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include "clang-c/Index.h"
 
 #include <sys/types.h>
@@ -12,6 +14,8 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <getopt.h>
+#include <dirent.h>
+#include <regex.h>
 
 typedef struct {
    CXFile     *source_file;
@@ -22,6 +26,8 @@ static FILE   *output = NULL;
 static char   *etags_buf = NULL;
 static char   *etags_wr_ptr = NULL;
 static size_t etags_buf_len = 0;
+
+#define SOURCE_REGEX "\\.(c|cpp|cc|cxx|h|hpp)$"
 
 static void emit_file(const char *file)
 {
@@ -172,7 +178,63 @@ static void process_file(CXTranslationUnit tu, const char *file)
    munmap(contents, st.st_size);
    close(fd);
 }
- 
+
+static void visit_path(const char *path, regex_t *preg,
+                       CXIndex index, const char *clang_argv[], int clang_argc)
+{
+   struct stat st;
+   int rc = stat(path, &st);
+   if (rc < 0) {
+      perror(path);
+      return;
+   }
+
+   if (S_ISDIR(st.st_mode)) {
+      printf("dir: %s\n", path);
+
+      DIR *d = opendir(path);
+      if (d == NULL) {
+         perror(path);
+         return;
+      }
+
+      struct dirent *ent;
+      while ((ent = readdir(d)) != NULL) {
+         if (ent->d_name[0] != '.') {
+            char *newpath;
+            asprintf(&newpath, "%s/%s", path, ent->d_name);
+            assert(newpath != NULL);
+
+            visit_path(newpath, preg, index, clang_argv, clang_argc);
+            
+            free(newpath);
+         }
+      }
+
+      closedir(d);
+   }
+   else if (S_ISREG(st.st_mode)) {
+      if (regexec(preg, path, 0, NULL, 0) != REG_NOMATCH) {
+         printf("file: %s\n", path);
+
+         CXTranslationUnit tu = clang_parseTranslationUnit(
+            index,            // Index
+            path,             // Source file name
+            clang_argv,       // Command line arguments
+            clang_argc,       // Number of arguments
+            NULL,             // Unsaved files
+            0,                // Number of unsaved files
+            0);               // Flags
+
+         process_file(tu, path);
+         clang_disposeTranslationUnit(tu); 
+      }
+   }
+   else if (S_ISLNK(st.st_mode)) {
+      // Ignore symlinks for now
+   }
+}
+
 static struct option long_options[] = {
    {0, 0, 0, 0}
 };
@@ -220,35 +282,22 @@ int main(int argc, char **argv)
       1,    // excludeDeclarationsFromPCH 
       1);   // displayDiagnostics
 
-   CXTranslationUnit *tus =
-      (CXTranslationUnit*)malloc(sizeof(CXTranslationUnit) * (argc - optind));
-   assert(tus != NULL);
-
-   for (int i = optind; i < argc; i++) {
-      tus[i - optind] = clang_parseTranslationUnit(
-         index,                            // Index
-         argv[i],                          // Source file name
-         (const char* const*)clang_argv,   // Command line arguments
-         clang_argc,                       // Number of arguments
-         NULL,                             // Unsaved files
-         0,                                // Number of unsaved files
-         0);                               // Flags
-   }
-
-   for (int i = optind; i < argc; i++) {
-      process_file(tus[i - optind], argv[i]);
-   }
+   regex_t source_files;
+   int rc = regcomp(&source_files, SOURCE_REGEX, REG_EXTENDED);
+   assert(rc == 0);
    
    for (int i = optind; i < argc; i++) {
-      clang_disposeTranslationUnit(tus[i - optind]);
+      visit_path(argv[i], &source_files, index,
+                 (const char**)clang_argv, clang_argc);
    }
+
    clang_disposeIndex(index);
         
    fclose(output);
    
    free(etags_buf);
-   free(tus);
    free(clang_argv);
+   regfree(&source_files);
 
    return 0;
 }
