@@ -53,9 +53,7 @@ static void emit_tag(const char *name, const char *text,
       etags_buf_len *= 2;
       etags_buf = realloc(etags_buf, etags_buf_len);
       assert(etags_buf != NULL);
-
-      printf("*** resize buffer to %lu\n", etags_buf_len);
-
+      
       etags_wr_ptr = etags_buf + etags_buf_off;
    }
 
@@ -125,9 +123,11 @@ static enum CXChildVisitResult cursor_visitor(CXCursor cursor,
          CXString str = clang_getCursorSpelling(cursor);
 
          if (clang_getCString(str)[0] != '\0') {
+#if 0
             printf("visit: %s: line %u col %u off %u: %s\n",
                    clang_getCString(file_str), line, column, offset,
                    clang_getCString(str));
+#endif
             emit_tag(clang_getCString(str), search, line, offset);
          }
          
@@ -190,8 +190,6 @@ static void visit_path(const char *path, regex_t *preg,
    }
 
    if (S_ISDIR(st.st_mode)) {
-      printf("dir: %s\n", path);
-
       DIR *d = opendir(path);
       if (d == NULL) {
          perror(path);
@@ -215,7 +213,11 @@ static void visit_path(const char *path, regex_t *preg,
    }
    else if (S_ISREG(st.st_mode)) {
       if (regexec(preg, path, 0, NULL, 0) != REG_NOMATCH) {
-         printf("file: %s\n", path);
+         static int nfiles = 0;
+         printf(".");
+         if ((++nfiles % 10) == 0)
+            printf("%d", nfiles);
+         fflush(stdout);
 
          CXTranslationUnit tu = clang_parseTranslationUnit(
             index,            // Index
@@ -290,6 +292,8 @@ int main(int argc, char **argv)
       visit_path(argv[i], &source_files, index,
                  (const char**)clang_argv, clang_argc);
    }
+
+   printf("\nDone.\n");
 
    clang_disposeIndex(index);
         
