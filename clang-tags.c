@@ -276,6 +276,7 @@ static void visit_path(const char *path, regex_t *preg,
             printf("%d", nfiles);
          fflush(stdout);
 
+         unsigned flags = CXTranslationUnit_Incomplete;
          CXTranslationUnit tu = clang_parseTranslationUnit(
             index,            // Index
             path,             // Source file name
@@ -283,7 +284,7 @@ static void visit_path(const char *path, regex_t *preg,
             clang_argc,       // Number of arguments
             NULL,             // Unsaved files
             0,                // Number of unsaved files
-            0);               // Flags
+            flags);           // Flags
 
          process_file(tu, path);
          clang_disposeTranslationUnit(tu); 
@@ -305,7 +306,7 @@ int main(int argc, char **argv)
    char **clang_argv = malloc(sizeof(char*) * max_clang_args);
    assert(clang_argv != NULL);
    
-   const char *spec = "I:";
+   const char *spec = "I:x:";
    int c, failure = 0;
    while ((c = getopt_long(argc, argv, spec, long_options, NULL)) != -1) {
       switch (c) {
@@ -314,6 +315,12 @@ int main(int argc, char **argv)
       case 'I':
          if (clang_argc < max_clang_args - 1) {
             clang_argv[clang_argc++] = "-I";
+            clang_argv[clang_argc++] = optarg;
+         }
+         break;
+      case 'x':
+         if (clang_argc < max_clang_args - 1) {
+            clang_argv[clang_argc++] = "-x";
             clang_argv[clang_argc++] = optarg;
          }
          break;
